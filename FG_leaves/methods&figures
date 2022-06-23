@@ -1,0 +1,454 @@
+#### Models fulles ####
+library(lme4)
+library(lmerTest)
+load("~/Desktop/Guaiana Papers/Treball/Above.R")
+Leaf <- subset(Above, Above$tissue == "leaf")
+Leaf <- Leaf[,-c(15,31,32,33,37,38,40,41,42)]
+Leaf <- subset(Leaf, Leaf$year == 2019)
+colnames(Leaf)
+Leaf <- Leaf[,c(1:5,7:9,15:16,19:24)]
+write.csv(Leaf, "~/Desktop/Guaiana Papers/Treball/v3/Data_leaves_FG19.csv")
+
+master_soil <- read.csv("~/Desktop/Guaiana Papers/To open and classify/Masporros/soil_Master file Macro elements SOIL_Ifi_Loles_Leandro.Master sheet.csv")
+master_soil <- subset(master_soil, master_soil$soilLayer != "littersoil")
+soil <- master_soil[,c(2:8,31,32,35,37,38,39,45)]
+soil$code <- paste(soil$site, soil$topography, soil$plot, soil$season, sep="_")
+colnames(soil)
+soilplot <- aggregate(soil[,c(8:14)], list(soil$code), mean, na.rm=TRUE)
+colnames(soilplot)[1] <- "code"
+
+Leaf$code <- paste(Leaf$site, Leaf$topography, Leaf$plot, Leaf$season, sep="_")
+Leafplot <- aggregate(Leaf[, c(19,20,24,25)], list(Leaf$code), mean, na.rm=TRUE)
+colnames(Leafplot)[1] <- "code"
+
+combined_plot <- merge(Leafplot, soilplot, by="code")
+combined_plot <- merge(unique(soil[,c(1,2,4,15)]), combined_plot, by="code")
+colnames(combined_plot)[9:15] <- c("soil_N", "soil_C", "bulk_dens", "Clay", "Silt", "soil_P", "soil_ph")
+
+Leaf <- merge(Leaf, combined_plot[,-c(2:8)], by="code")
+
+mixed_m <- function(elem,data){
+  out <- data.frame()
+  for(i in 1:length(elem)){
+    inverse <- "inverse"
+    form <- paste("lmer(log(",elem[i], ") ~ treatment+ (1|topography) +(1|season) + (1|site), data=data, na.action=na.omit)") #family = Gamma(link = ",inverse,")
+    m1 <- eval(parse(text=form))
+    e <- calc.relip.mm(m1)
+    reli <- c(NA,e@lmg)
+    sum <- summary(m1)
+    sum_mods <- data.frame(sum$coefficients, sum$AICtab[1],reli, elem[i]) #data.frame(sum$tTable, sum$AIC, elem[i])
+    out <- rbind(out, sum_mods)
+  }
+  colnames(out)[5:8] <- c("P-value", "AIC","Relative Imp.", "element")
+  return(out)
+}
+
+Leaf <- subset(Leaf, !is.na(Leaf$N))
+treatment_glmer <- mixed_m(elem=colnames(Leaf[c(20:25)]), data=Leaf)
+treatment_glmer$expEst <- exp(treatment_glmer$Estimate)
+
+write.csv(treatment_glmer, file="~/Desktop/Guaiana Papers/Treball/v2/Lmer_treatment_toporand.csv")
+
+#### PCA's ####
+load("~/Desktop/Guaiana Papers/Treball/Above.R")
+Leaf <- subset(Above, Above$tissue == "leaf")
+# treure S, V, Cr, Zn, As, Mo, Cd, Pb
+Leaf <- Leaf[,-c(31,32,33,37,38,40,41,42)]
+
+#per especies
+library(dplyr)
+Leaf <- subset(Leaf, Leaf$year == 2019)
+Leaf$g_s <- paste(Leaf$genus, Leaf$specie, sep="_")
+sps <- count(Leaf$g_s)
+
+all_sps <- subset(Leaf, Leaf$g_s == "Eperua_falcata" |
+                    Leaf$g_s == "Licania_alba" |
+                    Leaf$g_s == "Dicorynia_guianensis" |
+                    Leaf$g_s == "Eperua_grandiflora")
+
+all_sps$t_s <- paste(all_sps$treatment, all_sps$g_s, sep="_")
+#N
+all_sps19_CN <- subset(all_sps, all_sps$treatment == "C" |
+                         all_sps$treatment == "N")
+colnames(all_sps19_CN)
+all_sps19_CN_clean <- na.exclude(all_sps19_CN[,c(36,20:25,26)])
+
+pca <- prcomp(all_sps19_CN_clean[,2:8], scale=TRUE)
+
+groups <- as.factor(all_sps19_CN_clean$t_s)
+
+# tiff(filename="~/Desktop/Guaiana Papers/Treball/PCA_species_N_2019.tif",
+#      width=1400, height = 1000, res= 200)
+
+a <- fviz_pca_biplot(pca, geom="point", pointsize=0.7, repel = F,
+                col.var = "black", # Variables color
+                col.ind = groups,
+                palette = c("#9b19f5", "#ffa300", "#dc0ab4", "#00bfa0","#9b19f5", "#ffa300", "#dc0ab4", "#00bfa0"), #Individuals color
+                addEllipses = TRUE, # Concentration ellipses
+                ellipse.level= 0.95,
+                ellipse.type = "confidence",
+                legend.title = "Species by control/treatment",
+                title="N fertilization by species")+
+  scale_shape_manual(values=c(3,3,3,3,16,16,16,16))
+  
+# dev.off()
+
+library(magrittr) # for pipe %>%
+library(dplyr)
+res.ind <- get_pca_ind(pca)
+# 2. Coordinate of groups
+coord.groups <- res.ind$coord %>%
+  as_data_frame() %>%
+  select(Dim.1, Dim.2) %>%
+  mutate(competition = groups) %>%
+  group_by(competition) %>%
+  summarise(
+    Dim.1 = mean(Dim.1),
+    Dim.2 = mean(Dim.2)
+  )
+
+df <- as.data.frame(coord.groups)
+moving_dist_N <- cbind(df[1:4,],df[5:8,])
+moving_dist_N$x <- moving_dist_N[,5] - moving_dist_N[,2]
+moving_dist_N$y <- moving_dist_N[,6] - moving_dist_N[,3]
+moving_dist_N$dist <- sqrt(moving_dist_N$x^2 + moving_dist_N$y^2)
+
+#P
+all_sps19_CP <- subset(all_sps, all_sps$treatment == "C" |
+                         all_sps$treatment == "P")
+all_sps19_CP_clean <- na.exclude(all_sps19_CP[,c(36,20:25)])
+pca <- prcomp(all_sps19_CP_clean[,2:7], scale=TRUE)
+
+groups <- as.factor(all_sps19_CP_clean$t_s)
+
+# tiff(filename="~/Desktop/Guaiana Papers/Treball/PCA_species_P_2019.tif",
+#      width=1400, height = 1000, res= 200)
+b <- fviz_pca_biplot(pca, geom="point", pointsize=0.7, repel = F,
+                col.var = "black", # Variables color
+                col.ind = groups,
+                palette = c("#9b19f5", "#ffa300", "#dc0ab4", "#00bfa0","#9b19f5", "#ffa300", "#dc0ab4", "#00bfa0"), #Individuals color
+                addEllipses = TRUE, # Concentration ellipses
+                ellipse.type = "confidence",
+                legend.title = "Groups",
+                title="P fertilization by species")+
+  scale_shape_manual(values=c(3,3,3,3,16,16,16,16))
+# dev.off()
+
+res.ind <- get_pca_ind(pca)
+# 2. Coordinate of groups
+coord.groups <- res.ind$coord %>%
+  as_data_frame() %>%
+  select(Dim.1, Dim.2) %>%
+  mutate(competition = groups) %>%
+  group_by(competition) %>%
+  summarise(
+    Dim.1 = mean(Dim.1),
+    Dim.2 = mean(Dim.2)
+  )
+
+df <- as.data.frame(coord.groups)
+moving_dist_P <- cbind(df[1:4,],df[5:8,])
+moving_dist_P$x <- moving_dist_P[,5] - moving_dist_P[,2]
+moving_dist_P$y <- moving_dist_P[,6] - moving_dist_P[,3]
+moving_dist_P$dist <- sqrt(moving_dist_P$x^2 + moving_dist_P$y^2)
+
+#NP
+all_sps19_CNP <- subset(all_sps, all_sps$treatment == "C" |
+                         all_sps$treatment == "NP")
+all_sps19_CNP_clean <- na.exclude(all_sps19_CNP[,c(36,20:25)])
+pca <- prcomp(all_sps19_CNP_clean[,2:7], scale=TRUE)
+
+groups <- as.factor(all_sps19_CNP_clean$t_s)
+
+# tiff(filename="~/Desktop/Guaiana Papers/Treball/PCA_species_NP_2019.tif",
+#      width=1400, height = 1000, res= 200)
+c <- fviz_pca_biplot(pca, geom="point", pointsize=0.7, repel = F,
+                col.var = "black", # Variables color
+                col.ind = groups,
+                palette = c("#9b19f5", "#ffa300", "#dc0ab4", "#00bfa0","#9b19f5", "#ffa300", "#dc0ab4", "#00bfa0"), #Individuals color
+                addEllipses = TRUE, # Concentration ellipses
+                ellipse.type = "confidence",
+                legend.title = "Groups",
+                title="NP fertilization by species")+
+  scale_shape_manual(values=c(3,3,3,3,16,16,16,16))
+# dev.off()
+
+res.ind <- get_pca_ind(pca)
+# 2. Coordinate of groups
+coord.groups <- res.ind$coord %>%
+  as_data_frame() %>%
+  select(Dim.1, Dim.2) %>%
+  mutate(competition = groups) %>%
+  group_by(competition) %>%
+  summarise(
+    Dim.1 = mean(Dim.1),
+    Dim.2 = mean(Dim.2)
+  )
+
+df <- as.data.frame(coord.groups)
+moving_dist_NP <- cbind(df[1:4,],df[5:8,])
+moving_dist_NP$x <- moving_dist_NP[,5] - moving_dist_NP[,2]
+moving_dist_NP$y <- moving_dist_NP[,6] - moving_dist_NP[,3]
+moving_dist_NP$dist <- sqrt(moving_dist_NP$x^2 + moving_dist_NP$y^2)
+
+Treat_affect <- data.frame(moving_dist_N$competition, moving_dist_N$dist, moving_dist_P$dist, moving_dist_NP$dist)
+Treat_affect[,1] <- c("Dicorynia guianensis", "Eperua falcata", "Eperua grandifolora", "Licania alba")
+colnames(Treat_affect) <- c("Specie", "N fertilization effect", "P fertilization effect", "NP fertilization effect")
+write.csv(Treat_affect, file="~/Desktop/Guaiana Papers/Treball/v2/Taules/Treatment_intensityPCA.csv")
+
+library(ggpubr)
+tiff(filename="~/Desktop/Guaiana Papers/Treball/v3/Figures/Tri_PCA_species_2019_v2.tif",
+     width=1600, height = 1200, res= 200)
+ggarrange(a,b,c, ncol=2, nrow=2, common.legend = TRUE, legend="right")
+dev.off()
+
+#### Models genètics ####
+# Correcció filogenètica
+library(MCMCglmm)
+library(MuMIn)
+library(plyr)
+load("~/Desktop/Guaiana Papers/Treball/Above.R")
+Leaf <- subset(Above, Above$tissue == "leaf")
+Leaf <- Leaf[,-c(15,31,32,33,37,38,40,41,42)]
+Leaf$Species <- paste(Leaf$genus, Leaf$specie, sep="_")
+Leaf <- subset(Leaf, Leaf$year == 2019)
+
+tree <- read.tree(file="~/Desktop/Guaiana Papers/Treball/PhytoPhylo.tre")
+class(tree)="phylo"
+tree<- compute.brlen(tree, power=0.5)
+is.ultrametric(tree)
+MCMCglmm.updateable<- updateable(MCMCglmm)
+random_intercepts_prior <- function(n, V=1, nu=0.002){ #0.002 #310
+  R_=list(R1=list(V=V, nu=nu))
+  G_=replicate(n, list(V=V, nu=nu), simplify=FALSE)
+  names(G_) <- paste("G", 1:n, sep="")
+  return(list(R=R_, G=G_))
+}
+
+ccmods <- function(mod){
+  # effecte especies
+  species <- mod$VCV[, "Species"]/(mod$VCV[, "animal"] + mod$VCV[, "Species"] + mod$VCV[, "units"])  # posterior distribution of the plot effect, proportion of variance explained by the random effect
+  # effectiveSize(species)
+  # posterior.mode(species)
+  # median(species);mean(species)
+  # HPDinterval(species)
+  # plot(species)
+  
+  # efecte animal
+  phylo <- mod$VCV[, "animal"]/(mod$VCV[, "animal"] + mod$VCV[, "Species"] + mod$VCV[, "units"])  # posterior distribution of the phylo effect, proportion of variance explained by the random effect
+  # effectiveSize(phylo)
+  # posterior.mode(phylo)
+  # median(phylo);mean(phylo)
+  # HPDinterval(phylo)
+  # plot(phylo)
+  
+  # efecte units
+  units <- mod$VCV[, "units"]/(mod$VCV[, "animal"] + mod$VCV[, "Species"] + mod$VCV[, "units"])  # posterior distribution of the units effect, proportion of variance explained by the random effect
+  # effectiveSize(units)
+  # posterior.mode(units)
+  # median(units);mean(units)
+  # HPDinterval(units)
+  # plot(units)
+  return(data.frame(phylo=mean(phylo), species=mean(species), units=mean(units)))
+}
+
+rsq.mcmc <- function(mmF){ # for 6 predictors + intercept, species and phylogeny
+  # mmF <- mod2
+  mFixed<- mean(mmF$Sol[,2]) * mmF$X[, 2]
+  # Calculation of the variance in fitted values
+  mVarF<- var(mFixed)
+  # MCMCglmm - marginal
+  mVarF/(mVarF+sum(apply(mmF$VCV,2,mean)))
+  # alternative with crebile intervals
+  vmVarF<-numeric(nrow(mmF$VCV))
+  for(i in 1:nrow(mmF$VCV)){
+    Var<-var(as.vector(mmF$Sol[i, intersect(colnames(mmF$X), colnames(mmF$Sol))] %*% t(mmF$X)))
+    vmVarF[i]<-Var
+  }
+  R2m<-vmVarF/(vmVarF+mmF$VCV[,1]+mmF$VCV[,2]+mmF$VCV[,3]) # remove the last if only 1 random
+  # R2m<-vmVarF/(vmVarF+mmF$VCV[,1]+mmF$VCV[,2]) #
+  mean(R2m)
+  # posterior.mode(R2m)
+  # HPDinterval(R2m)
+  
+  # MCMCglmm - conditional
+  # (mVarF+sum(apply(mmF$VCV,2,mean)[-3]))/(mVarF+sum(apply(mmF$VCV,2,mean))) # if only 1 random, [-2] (below)
+  # (mVarF+sum(apply(mmF$VCV,2,mean)[-2]))/(mVarF+sum(apply(mmF$VCV,2,mean))) # if only 1 random, [-2]
+  # alternative with crebile intervals
+  R2c<-(vmVarF+mmF$VCV[,1]+mmF$VCV[,2])/(vmVarF+mmF$VCV[,1]+mmF$VCV[,2]+mmF$VCV[,3]) # if only 1 random, remove the second
+  # R2c<-(vmVarF+mmF$VCV[,1])/(vmVarF+mmF$VCV[,1]+mmF$VCV[,2]) #
+  # mean(R2c)
+  # posterior.mode(R2c)
+  # HPDinterval(R2c)
+  return(data.frame(R2m=mean(R2m), R2c=mean(R2c)))
+}
+i=4
+elem <- colnames(Leaf[,17:33]) #17:33
+colnames(Leaf)[34] <- "Species"
+
+unique(selected.sps$Species)
+genetic_m <- function(elem,dades=Leaf, rep.sp=4){
+  out <- data.frame()
+  tree.pr <- drop.tip(tree,tip=tree$tip.label[!tree$tip.label %in% unique(dades$Species)])
+  tree.pr$node.label<- 1:length(tree.pr$node.label)
+  subdata <- dades[which(dades$Species %in%tree.pr$tip.label),]
+  subdata$animal <- subdata$Species
+  num <- count(subdata$Species)
+  subdata <- merge(subdata,num, by.x="Species", by.y="x")
+  selected.sps <- subset(subdata, subdata$freq>rep.sp)
+  Nnitt=400000 #400000
+  Nthin=150 #150
+  Nburnin=20000 #20000
+  for(i in 1:length(elem)){
+    gaussian <- "gaussian"
+    form <- paste("MCMCglmm.updateable(log(", elem[i], ") ~ treatment, random=~animal+Species, data=selected.sps, pedigree=tree.pr, nodes='TIPS',
+                                      verbose=T, prior=random_intercepts_prior(2), 
+                                      nitt=Nnitt, burnin=Nburnin, thin=Nthin, pr=TRUE)")
+    m1 <- eval(parse(text=form))
+    sum <- summary(m1)
+    ccm <- ccmods(m1)
+    r <- rsq.mcmc(m1)
+    sum$solutions
+    sum_mods <- data.frame(sum$solutions, ccm, r, elem[i])
+    out <- rbind(out, sum_mods)
+  }
+  return(out)
+}
+# colnames(Leaf)[1] <- "Species"
+# Micodata <- subset(Micodata, !is.na(Micodata$N))
+# Micodata <- subset(Micodata, !is.na(Micodata$P))
+
+Leaf$Species <- paste(Leaf$genus, Leaf$specie, sep="_")
+genetics <- genetic_m(elem=colnames(Leaf[,20:25]),dades=Leaf, rep.sp=4)
+genetics$logEstimate <- exp(genetics$post.mean)
+write.csv(genetics, file="~/Desktop/Guaiana Papers/Treball/v2/SM/Genetics_topographyFix_log.csv")
+
+
+summary(Leaf)
+library("phytools")
+tree <- read.tree(file="~/Desktop/Guaiana Papers/Treball/PhytoPhylo.tre")
+class(tree)="phylo"
+tree<- compute.brlen(tree, power=0.5)
+is.ultrametric(tree)
+library(ape)
+library(MCMCglmm)
+library(MuMIn)
+MCMCglmm.updateable<- updateable(MCMCglmm)
+random_intercepts_prior <- function(n, V=1, nu=0.002){ #0.002 #310
+  R_=list(R1=list(V=V, nu=nu))
+  G_=replicate(n, list(V=V, nu=nu), simplify=FALSE)
+  names(G_) <- paste("G", 1:n, sep="")
+  return(list(R=R_, G=G_))
+}
+
+summary(mod.P)
+ccmods(m1)
+rsq.mcmc(m1)
+heidel.diag(m1$VCV) # Heidelberg convergence test. Convergence if pval>0.05. If failed pujar burnin
+autocorr.diag(m1$VCV) #  Han d'estar per sota de 0.1. Si no, pujar thin
+effectiveSize(m1$VCV) # Al voltant de 1000. Si no, pujar burnin
+
+#### N-fixer db ####
+library(openxlsx)
+nfix <- read.xlsx("~/Desktop/Guaiana Papers/Treball/Nfixer_DB_Tedersoo.xlsx", startRow = 2)
+unique(nfix$Consensus.estimate)
+unique(nfix$genus)
+
+load("~/Desktop/Guaiana Papers/Treball/Above.R")
+Leaf <- subset(Above, Above$tissue == "leaf")
+Leaf <- Leaf[,-c(31,32,33,37,38,40,41,42)] #15, familia
+Leaf <- subset(Leaf, !is.na(Leaf$family))
+Leaf <- subset(Leaf, Leaf$year == 2019)
+
+present <- nfix[which(nfix$genus %in% Leaf$genus),]
+
+Leaf$Nfix <- NA
+
+for(i in 1:nrow(Leaf)){
+  if (Leaf$genus[i] %in% present$genus){
+    Leaf$Nfix[i] <- "Yes" }
+  else {
+    Leaf$Nfix[i] <- "No"
+  }
+}
+
+Leaf$sp <- paste(Leaf$genus, Leaf$specie, sep="_")
+colnames(Leaf)
+Nfixer_sps <- unique(Leaf[,c(35:36)])
+
+write.csv(Nfixer_sps, file="~/Desktop/Guaiana Papers/Treball/v2/SM/Nfixer_sps.csv")
+
+#### N fixer analysis ####
+mixed_Nfix <- function(elem,data){
+  out <- data.frame()
+  for(i in 1:length(elem)){
+    inverse <- "inverse"
+    form <- paste("lmer(","log(",elem[i],")", "~ treatment*Nfix + (1|treatment) + (1|season) + (1|site), data=data, na.action=na.exclude)") #family = Gamma(link = ",inverse,")
+    m1 <- eval(parse(text=form))
+    e <- calc.relip.mm(m1)
+    reli <- c(NA,e@lmg)
+    sum <- summary(m1)
+    sum_mods <- data.frame(sum$coefficients, sum$AICtab[1],reli,elem[i]) #data.frame(sum$tTable, sum$AIC, elem[i])
+    out <- rbind(out, sum_mods)
+  }
+  colnames(sum_mods)[4:7] <- c("P-value", "AIC","Relative Imp.","element")
+  return(out)
+}
+
+Leaf <- subset(Leaf, !is.na(Leaf$N))
+
+Nfix_lme <- mixed_Nfix(elem = colnames(Leaf)[20:25], data = Leaf)
+Nfix_lme$logEst <- exp(Nfix_lme$Estimate)
+write.csv(Nfix_lme, "~/Desktop/Guaiana Papers/Treball/v2/Nfix_models.csv")
+
+#### Soils Eric Mixed models ####
+library(relaimpo)
+calc.relip.mm <- function(model,type='lmg') {
+  if (!isLMM(model) & !isGLMM(model)) {
+    stop('Currently supports only lmer/glmer objects', call. = FALSE)
+  }
+  require(lme4)
+  X <- getME(model,'X')
+  X <- X[,-1]
+  Y <- getME(model,'y')
+  s_resid <- sigma(model)
+  s_effect <- getME(model,'theta')*s_resid
+  s2 <- sum(s_resid^2,s_effect^2)
+  V <- Diagonal(x = s2,n=nrow(X))
+  YX <- cbind(Y,X)
+  cov_XY <- solve( t(YX) %*% solve(V) %*% as.matrix(YX))
+  colnames(cov_XY) <- rownames(cov_XY) <- colnames(YX)
+  importances <- calc.relimp(as.matrix(cov_XY),rela=T,type=type)
+  return(importances)
+}
+
+mixed_mico <- function(elem,data){
+  out <- data.frame()
+  for(i in 1:length(elem)){
+    inverse <- "inverse"
+    form <- paste("lmer(log(",elem[i], ")~ treatment*new_micoclass + (1|topography) + (1|season) + (1|site), data=data, na.action=na.omit)") #family = Gamma(link = ",inverse,")
+    m1 <- eval(parse(text=form))
+    e <- calc.relip.mm(m1)
+    reli <- c(NA,e@lmg)
+    sum <- summary(m1)
+    sum_mods <- data.frame(sum$coefficients, sum$AICtab[1],reli,elem[i]) #data.frame(sum$tTable, sum$AIC, elem[i])
+    out <- rbind(out, sum_mods)
+  }
+  colnames(sum_mods)[4:7] <- c("P-value", "AIC","Relative Imp.","element")
+  return(out)
+}
+colnames(complet_sub)
+Mico_sps <- unique(complet_sub[,c(2,48)])
+
+write.csv(Mico_sps, file="~/Desktop/Guaiana Papers/Treball/v2/SM/Mico_species.csv")
+
+m1 <- lmer(N ~ N_treat*new_micoclass + topography + (1|season) + (1|site), data=complet_sub, na.action=na.omit)
+summary(m1)
+
+complet_sub <- subset(complet_sub, !is.na(complet_sub$N))
+complet_sub <- subset(complet_sub, !is.na(complet_sub$P))
+
+test <- mixed_mico(elem = colnames(complet_sub)[22:28], data = complet_sub)
+test$expEst <- exp(test$Estimate)
+write.csv(test, file="~/Desktop/Guaiana Papers/Treball/v2/Mico.csv")
+
